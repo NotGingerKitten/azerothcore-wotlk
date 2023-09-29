@@ -16,7 +16,6 @@
  */
 
 #include "Guild.h"
-#include "AccountMgr.h"
 #include "Bag.h"
 #include "CalendarMgr.h"
 #include "CharacterCache.h"
@@ -523,7 +522,7 @@ void Guild::BankTab::SendText(Guild const* guild, WorldSession* session) const
 void Guild::Member::SetStats(Player* player)
 {
     m_name      = player->GetName();
-    m_level     = player->getLevel();
+    m_level     = player->GetLevel();
     m_class     = player->getClass();
     m_gender    = player->getGender();
     m_zoneId    = player->GetZoneId();
@@ -830,7 +829,7 @@ bool Guild::BankMoveItemData::HasStoreRights(MoveItemData* pOther) const
     // Do not check rights if item is being swapped within the same bank tab
     if (pOther->IsBank() && pOther->GetContainer() == m_container)
         return true;
-    return m_pGuild->_MemberHasTabRights(m_pPlayer->GetGUID(), m_container, GUILD_BANK_RIGHT_DEPOSIT_ITEM);
+    return m_pGuild->MemberHasTabRights(m_pPlayer->GetGUID(), m_container, GUILD_BANK_RIGHT_DEPOSIT_ITEM);
 }
 
 bool Guild::BankMoveItemData::HasWithdrawRights(MoveItemData* pOther) const
@@ -1184,7 +1183,7 @@ void Guild::OnPlayerStatusChange(Player* player, uint32 flag, bool state)
 
 bool Guild::SetName(std::string_view const& name)
 {
-    if (m_name == name || name.empty() || name.length() > 24 || sObjectMgr->IsReservedName(name) || !ObjectMgr::IsValidCharterName(name))
+    if (m_name == name || name.empty() || name.length() > 24 || sObjectMgr->IsReservedName(name) || sObjectMgr->IsProfanityName(name) || !ObjectMgr::IsValidCharterName(name))
     {
         return false;
     }
@@ -1201,6 +1200,7 @@ void Guild::HandleRoster(WorldSession* session)
 {
     WorldPackets::Guild::GuildRoster roster;
 
+    roster.RankData.reserve(m_ranks.size());
     for (RankInfo const& rank : m_ranks)
     {
         WorldPackets::Guild::GuildRankData& rankData =  roster.RankData.emplace_back();
@@ -1214,7 +1214,8 @@ void Guild::HandleRoster(WorldSession* session)
         }
     }
 
-    bool sendOfficerNote = _HasRankRight(session->GetPlayer(), GR_RIGHT_VIEWOFFNOTE);
+    bool sendOfficerNote = HasRankRight(session->GetPlayer(), GR_RIGHT_VIEWOFFNOTE);
+    roster.MemberData.reserve(m_members.size());
     for (auto const& [guid, member] : m_members)
     {
         WorldPackets::Guild::GuildRosterMemberData& memberData = roster.MemberData.emplace_back();
@@ -1270,7 +1271,7 @@ void Guild::HandleSetMOTD(WorldSession* session, std::string_view motd)
         return;
 
     // Player must have rights to set MOTD
-    if (!_HasRankRight(session->GetPlayer(), GR_RIGHT_SETMOTD))
+    if (!HasRankRight(session->GetPlayer(), GR_RIGHT_SETMOTD))
         SendCommandResult(session, GUILD_COMMAND_EDIT_MOTD, ERR_GUILD_PERMISSIONS);
     else
     {
@@ -1293,7 +1294,7 @@ void Guild::HandleSetInfo(WorldSession* session, std::string_view info)
         return;
 
     // Player must have rights to set guild's info
-    if (_HasRankRight(session->GetPlayer(), GR_RIGHT_MODIFY_GUILD_INFO))
+    if (HasRankRight(session->GetPlayer(), GR_RIGHT_MODIFY_GUILD_INFO))
     {
         m_info = info;
 
@@ -1324,6 +1325,12 @@ void Guild::HandleSetEmblem(WorldSession* session, const EmblemInfo& emblemInfo)
 
         HandleQuery(session);
     }
+}
+
+void Guild::HandleSetEmblem(EmblemInfo const& emblemInfo)
+{
+    m_emblemInfo = emblemInfo;
+    m_emblemInfo.SaveToDB(m_id);
 }
 
 void Guild::HandleSetLeader(WorldSession* session, std::string_view name)
@@ -1362,7 +1369,7 @@ void Guild::HandleSetBankTabInfo(WorldSession* session, uint8 tabId, std::string
 void Guild::HandleSetMemberNote(WorldSession* session, std::string_view name, std::string_view note, bool isPublic)
 {
     // Player must have rights to set public/officer note
-    if (!_HasRankRight(session->GetPlayer(), isPublic ? GR_RIGHT_EPNOTE : GR_RIGHT_EOFFNOTE))
+    if (!HasRankRight(session->GetPlayer(), isPublic ? GR_RIGHT_EPNOTE : GR_RIGHT_EOFFNOTE))
         SendCommandResult(session, GUILD_COMMAND_PUBLIC_NOTE, ERR_GUILD_PERMISSIONS);
     else if (Member* member = GetMember(name))
     {
@@ -1386,12 +1393,35 @@ void Guild::HandleSetRankInfo(WorldSession* session, uint8 rankId, std::string_v
         rankInfo->SetRights(rights);
         _SetRankBankMoneyPerDay(rankId, moneyPerDay);
 
-        for (auto rightsAndSlot : rightsAndSlots)
+        for (auto& rightsAndSlot : rightsAndSlots)
             _SetRankBankTabRightsAndSlots(rankId, rightsAndSlot);
 
         _BroadcastEvent(GE_RANK_UPDATED, ObjectGuid::Empty, std::to_string(rankId), rankInfo->GetName(), std::to_string(m_ranks.size()));
 
         LOG_DEBUG("guild", "Changed RankName to '{}', rights to 0x{:08X}", rankInfo->GetName(), rights);
+    }
+}
+
+void Guild::HandleSetRankInfo(uint8 rankId, uint32 rights, std::string_view name, uint32 moneyPerDay)
+{
+    if (RankInfo* rankInfo = GetRankInfo(rankId))
+    {
+        if (!name.empty())
+        {
+            rankInfo->SetName(name);
+        }
+
+        if (rights > 0)
+        {
+            rankInfo->SetRights(rights);
+        }
+
+        if (moneyPerDay > 0)
+        {
+            _SetRankBankMoneyPerDay(rankId, moneyPerDay);
+        }
+
+        _BroadcastEvent(GE_RANK_UPDATED, ObjectGuid::Empty, std::to_string(rankId), rankInfo->GetName(), std::to_string(m_ranks.size()));
     }
 }
 
@@ -1457,7 +1487,7 @@ void Guild::HandleInviteMember(WorldSession* session, std::string const& name)
         return;
     }
     // Inviting player must have rights to invite
-    if (!_HasRankRight(player, GR_RIGHT_INVITE))
+    if (!HasRankRight(player, GR_RIGHT_INVITE))
     {
         SendCommandResult(session, GUILD_COMMAND_INVITE, ERR_GUILD_PERMISSIONS);
         return;
@@ -1528,7 +1558,7 @@ void Guild::HandleRemoveMember(WorldSession* session, std::string_view name)
 {
     Player* player = session->GetPlayer();
     // Player must have rights to remove members
-    if (!_HasRankRight(player, GR_RIGHT_REMOVE))
+    if (!HasRankRight(player, GR_RIGHT_REMOVE))
         SendCommandResult(session, GUILD_COMMAND_REMOVE, ERR_GUILD_PERMISSIONS);
     else if (Member* member = GetMember(name))
     {
@@ -1558,7 +1588,7 @@ void Guild::HandleUpdateMemberRank(WorldSession* session, std::string_view name,
     Player* player = session->GetPlayer();
     GuildCommandType type = demote ? GUILD_COMMAND_DEMOTE : GUILD_COMMAND_PROMOTE;
     // Player must have rights to promote
-    if (!_HasRankRight(player, demote ? GR_RIGHT_DEMOTE : GR_RIGHT_PROMOTE))
+    if (!HasRankRight(player, demote ? GR_RIGHT_DEMOTE : GR_RIGHT_PROMOTE))
         SendCommandResult(session, type, ERR_GUILD_PERMISSIONS);
     // Promoted player must be a member of guild
     else if (Member* member = GetMember(name))
@@ -1672,7 +1702,7 @@ void Guild::HandleMemberDepositMoney(WorldSession* session, uint32 amount)
 
     if (amount > 10 * GOLD)     // receiver_acc = Guild id, receiver_name = Guild name
         CharacterDatabase.Execute("INSERT INTO log_money VALUES({}, {}, \"{}\", \"{}\", {}, \"{}\", {}, \"(guild members: {}, new amount: {}, leader guid low: {}, sender level: {})\", NOW(), {})",
-            session->GetAccountId(), player->GetGUID().GetCounter(), player->GetName(), session->GetRemoteAddress(), GetId(), GetName(), amount, GetMemberCount(), GetTotalBankMoney(), GetLeaderGUID().GetCounter(), player->getLevel(), 3);
+            session->GetAccountId(), player->GetGUID().GetCounter(), player->GetName(), session->GetRemoteAddress(), GetId(), GetName(), amount, GetMemberCount(), GetTotalBankMoney(), GetLeaderGUID().GetCounter(), player->GetLevel(), 3);
 }
 
 bool Guild::HandleMemberWithdrawMoney(WorldSession* session, uint32 amount, bool repair)
@@ -1716,7 +1746,7 @@ bool Guild::HandleMemberWithdrawMoney(WorldSession* session, uint32 amount, bool
 
     if (amount > 10 * GOLD)     // sender_acc = 0 (guild has no account), sender_guid = Guild id, sender_name = Guild name
         CharacterDatabase.Execute("INSERT INTO log_money VALUES({}, {}, \"{}\", \"{}\", {}, \"{}\", {}, \"(guild, members: {}, new amount: {}, leader guid low: {}, withdrawer level: {})\", NOW(), {})",
-            0, GetId(), GetName(), session->GetRemoteAddress(), session->GetAccountId(), player->GetName(), amount, GetMemberCount(), GetTotalBankMoney(), GetLeaderGUID().GetCounter(), player->getLevel(), 4);
+            0, GetId(), GetName(), session->GetRemoteAddress(), session->GetAccountId(), player->GetName(), amount, GetMemberCount(), GetTotalBankMoney(), GetLeaderGUID().GetCounter(), player->GetLevel(), 4);
 
     std::string aux = Acore::Impl::ByteArrayToHexStr(reinterpret_cast<uint8*>(&m_bankMoney), 8, true);
     _BroadcastEvent(GE_BANK_MONEY_SET, ObjectGuid::Empty, aux.c_str());
@@ -1798,8 +1828,14 @@ void Guild::SendBankTabData(WorldSession* session, uint8 tabId, bool sendAllSlot
         _SendBankContent(session, tabId, sendAllSlots);
 }
 
-void Guild::SendBankTabsInfo(WorldSession* session, bool sendAllSlots /*= false*/) const
+void Guild::SendBankTabsInfo(WorldSession* session, bool sendAllSlots /*= false*/)
 {
+    Member* member = GetMember(session->GetPlayer()->GetGUID());
+    if (!member)
+        return;
+
+    member->SubscribeToGuildBankUpdatePackets();
+
     _SendBankList(session, 0, sendAllSlots);
 }
 
@@ -1809,18 +1845,23 @@ void Guild::SendBankTabText(WorldSession* session, uint8 tabId) const
         tab->SendText(this, session);
 }
 
-void Guild::SendPermissions(WorldSession* session) const
+void Guild::SendPermissions(WorldSession* session)
 {
-    Member const* member = GetMember(session->GetPlayer()->GetGUID());
+    Member* member = GetMember(session->GetPlayer()->GetGUID());
     if (!member)
         return;
+
+    // We are unsubscribing here since it is the only reliable way to handle /reload from player as
+    // GuildPermissionsQuery is sent on each reload, and we don't want to send partial changes while client
+    // doesn't know the full state
+    member->UnsubscribeFromGuildBankUpdatePackets();
 
     uint8 rankId = member->GetRankId();
 
     WorldPackets::Guild::GuildPermissionsQueryResults queryResult;
     queryResult.RankID = rankId;
     queryResult.WithdrawGoldLimit = _GetRankBankMoneyPerDay(rankId);
-    queryResult.Flags = _GetRankRights(rankId);
+    queryResult.Flags = GetRankRights(rankId);
     queryResult.NumTabs = _GetPurchasedTabsSize();
 
     for (uint8 tabId = 0; tabId < GUILD_BANK_MAX_TABS; ++tabId)
@@ -1856,8 +1897,6 @@ void Guild::SendLoginInfo(WorldSession* session)
     session->SendPacket(motd.Write());
 
     LOG_DEBUG("guild", "SMSG_GUILD_EVENT [{}] MOTD", session->GetPlayerInfo());
-
-    SendBankTabsInfo(session);
 
     Player* player = session->GetPlayer();
 
@@ -2088,13 +2127,13 @@ bool Guild::Validate()
 // Broadcasts
 void Guild::BroadcastToGuild(WorldSession* session, bool officerOnly, std::string_view msg, uint32 language) const
 {
-    if (session && session->GetPlayer() && _HasRankRight(session->GetPlayer(), officerOnly ? GR_RIGHT_OFFCHATSPEAK : GR_RIGHT_GCHATSPEAK))
+    if (session && session->GetPlayer() && HasRankRight(session->GetPlayer(), officerOnly ? GR_RIGHT_OFFCHATSPEAK : GR_RIGHT_GCHATSPEAK))
     {
         WorldPacket data;
         ChatHandler::BuildChatPacket(data, officerOnly ? CHAT_MSG_OFFICER : CHAT_MSG_GUILD, Language(language), session->GetPlayer(), nullptr, msg);
         for (auto const& [guid, member] : m_members)
             if (Player* player = member.FindPlayer())
-                if (_HasRankRight(player, officerOnly ? GR_RIGHT_OFFCHATLISTEN : GR_RIGHT_GCHATLISTEN) && !player->GetSocial()->HasIgnore(session->GetPlayer()->GetGUID()))
+                if (HasRankRight(player, officerOnly ? GR_RIGHT_OFFCHATLISTEN : GR_RIGHT_GCHATLISTEN) && !player->GetSocial()->HasIgnore(session->GetPlayer()->GetGUID()))
                     player->GetSession()->SendPacket(&data);
     }
 }
@@ -2371,7 +2410,7 @@ void Guild::_CreateNewBankTab()
     trans->Append(stmt);
 
     ++tabId;
-    for (auto & m_rank : m_ranks)
+    for (auto& m_rank : m_ranks)
         m_rank.CreateMissingTabsIfNeeded(tabId, trans, false);
 
     CharacterDatabase.CommitTransaction(trans);
@@ -2497,7 +2536,7 @@ inline std::string Guild::_GetRankName(uint8 rankId) const
     return "<unknown>";
 }
 
-inline uint32 Guild::_GetRankRights(uint8 rankId) const
+uint32 Guild::GetRankRights(uint8 rankId) const
 {
     if (const RankInfo* rankInfo = GetRankInfo(rankId))
         return rankInfo->GetRights();
@@ -2546,7 +2585,7 @@ inline int32 Guild::_GetMemberRemainingMoney(Member const& member) const
     if (rankId == GR_GUILDMASTER)
         return static_cast<int32>(GUILD_WITHDRAW_MONEY_UNLIMITED);
 
-    if ((_GetRankRights(rankId) & (GR_RIGHT_WITHDRAW_REPAIR | GR_RIGHT_WITHDRAW_GOLD)) != 0)
+    if ((GetRankRights(rankId) & (GR_RIGHT_WITHDRAW_REPAIR | GR_RIGHT_WITHDRAW_GOLD)) != 0)
     {
         int32 remaining = _GetRankBankMoneyPerDay(rankId) - member.GetBankWithdrawValue(GUILD_BANK_MAX_TABS);
         if (remaining > 0)
@@ -2566,7 +2605,7 @@ inline void Guild::_UpdateMemberWithdrawSlots(CharacterDatabaseTransaction trans
     }
 }
 
-inline bool Guild::_MemberHasTabRights(ObjectGuid guid, uint8 tabId, uint32 rights) const
+bool Guild::MemberHasTabRights(ObjectGuid guid, uint8 tabId, uint32 rights) const
 {
     if (const Member* member = GetMember(guid))
     {
@@ -2575,6 +2614,19 @@ inline bool Guild::_MemberHasTabRights(ObjectGuid guid, uint8 tabId, uint32 righ
             return true;
         return (_GetRankBankTabRights(member->GetRankId(), tabId) & rights) == rights;
     }
+    return false;
+}
+
+bool Guild::HasRankRight(Player* player, uint32 right) const
+{
+    if (player)
+    {
+        if (Member const* member = GetMember(player->GetGUID()))
+        {
+            return (GetRankRights(member->GetRankId()) & right) != GR_RIGHT_EMPTY;
+        }
+    }
+
     return false;
 }
 
@@ -2723,7 +2775,7 @@ bool Guild::_DoItemsMove(MoveItemData* pSrc, MoveItemData* pDest, bool sendError
 void Guild::_SendBankContent(WorldSession* session, uint8 tabId, bool sendAllSlots) const
 {
     ObjectGuid guid = session->GetPlayer()->GetGUID();
-    if (!_MemberHasTabRights(guid, tabId, GUILD_BANK_RIGHT_VIEW_TAB))
+    if (!MemberHasTabRights(guid, tabId, GUILD_BANK_RIGHT_VIEW_TAB))
         return;
 
     _SendBankList(session, tabId, sendAllSlots);
@@ -2878,13 +2930,17 @@ void Guild::_SendBankList(WorldSession* session /* = nullptr*/, uint8 tabId /*= 
         LOG_DEBUG("guild", "SMSG_GUILD_BANK_LIST [{}]: TabId: {}, FullSlots: {}, slots: {}",
                      session->GetPlayerInfo(), tabId, sendAllSlots, packet.WithdrawalsRemaining);
     }
-    else /// @todo - Probably this is just sent to session + those that have sent CMSG_GUILD_BANKER_ACTIVATE
+    else
     {
         packet.Write();
         for (auto const& [guid, member] : m_members)
         {
-            if (!_MemberHasTabRights(member.GetGUID(), tabId, GUILD_BANK_RIGHT_VIEW_TAB))
+            if (!member.ShouldReceiveBankPartialUpdatePackets())
                 continue;
+
+            if (!MemberHasTabRights(member.GetGUID(), tabId, GUILD_BANK_RIGHT_VIEW_TAB))
+                continue;
+
             Player* player = member.FindPlayer();
             if (!player)
                 continue;

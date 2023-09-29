@@ -79,7 +79,7 @@ public:
 
     void EnterCombatWithTrio(Unit* who)
     {
-        BossAI::EnterCombat(who);
+        BossAI::JustEngagedWith(who);
 
         if (Creature* vem = instance->GetCreature(DATA_VEM))
         {
@@ -166,7 +166,7 @@ public:
         me->SetSpeed(MOVE_RUN, 15.f/7.f); // From sniffs
         DoCastSelf(SPELL_FULL_HEAL, true);
         if (me->GetThreatMgr().GetThreatListSize())
-            DoResetThreat();
+            DoResetThreatList();
         if (Creature* dying = instance->GetCreature(_creatureDying))
         {
             dying->AI()->DoAction(ACTION_EXPLODE);
@@ -222,7 +222,7 @@ public:
 
     void DamageTaken(Unit* who, uint32& damage, DamageEffectType, SpellSchoolMask) override
     {
-        if (_dying && who->GetGUID() != me->GetGUID())
+        if (_dying && who && who->GetGUID() != me->GetGUID())
             damage = 0;
 
         if (me->HealthBelowPctDamaged(0, damage) && instance->GetData(DATA_BUG_TRIO_DEATH) < 2 && !_dying)
@@ -331,7 +331,7 @@ struct boss_kri : public boss_bug_trio
     {
     }
 
-    void EnterCombat(Unit* who) override
+    void JustEngagedWith(Unit* who) override
     {
         EnterCombatWithTrio(who);
 
@@ -359,7 +359,7 @@ struct boss_vem : public boss_bug_trio
     {
     }
 
-    void EnterCombat(Unit* who) override
+    void JustEngagedWith(Unit* who) override
     {
         EnterCombatWithTrio(who);
 
@@ -400,7 +400,7 @@ struct boss_yauj : public boss_bug_trio
     {
     }
 
-    void EnterCombat(Unit* who) override
+    void JustEngagedWith(Unit* who) override
     {
         EnterCombatWithTrio(who);
 
@@ -419,7 +419,7 @@ struct boss_yauj : public boss_bug_trio
         .Schedule(12s, [this](TaskContext context)
         {
             DoCastAOE(SPELL_FEAR);
-            DoResetThreat();
+            DoResetThreatList();
             context.Repeat(20600ms);
         })
         .Schedule(11s, 14500ms, [this](TaskContext context)

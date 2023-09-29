@@ -162,7 +162,7 @@ UpdateFetcher::DirectoryStorage UpdateFetcher::ReceiveIncludedDirectories() cons
         // data/sql
         for (auto const& itr : moduleList)
         {
-            std::string path = _sourceDirectory->generic_string() + "/modules/" + itr + "/data/sql/" + _dbModuleName; // modules/mod-name/data/sql/db-world
+            std::string path = _sourceDirectory->generic_string() + "/modules/" + itr + "/sql/" + _dbModuleName; // modules/mod-name/sql/world
 
             Path const p(path);
             if (!is_directory(p))
@@ -252,7 +252,7 @@ UpdateResult UpdateFetcher::Update(bool const redundancyChecks,
 
     // Fill hash to name cache
     HashToFileNameStorage hashToName;
-    for (auto entry : applied)
+    for (auto& entry : applied)
         hashToName.insert(std::make_pair(entry.second.hash, entry.first));
 
     size_t importedUpdates = 0;

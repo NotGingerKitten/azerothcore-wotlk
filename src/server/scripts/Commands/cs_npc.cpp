@@ -15,13 +15,6 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* ScriptData
-Name: npc_commandscript
-%Complete: 100
-Comment: All npc related commands
-Category: commandscripts
-EndScriptData */
-
 #include "Chat.h"
 #include "CreatureAI.h"
 #include "CreatureGroups.h"
@@ -225,6 +218,7 @@ public:
             {
                 ObjectGuid::LowType guid = sObjectMgr->GenerateCreatureSpawnId();
                 CreatureData& data = sObjectMgr->NewOrExistCreatureData(guid);
+                data.spawnId = guid;
                 data.id1 = id;
                 data.phaseMask = chr->GetPhaseMaskForSpawn();
                 data.posX = chr->GetTransOffsetX();
@@ -612,7 +606,7 @@ public:
         std::string defRespawnDelayStr = secsToTimeString(target->GetRespawnDelay(), true);
 
         handler->PSendSysMessage(LANG_NPCINFO_CHAR,  target->GetSpawnId(), target->GetGUID().GetCounter(), entry, id1, id2, id3, displayid, nativeid, faction, npcflags);
-        handler->PSendSysMessage(LANG_NPCINFO_LEVEL, target->getLevel());
+        handler->PSendSysMessage(LANG_NPCINFO_LEVEL, target->GetLevel());
         handler->PSendSysMessage(LANG_NPCINFO_EQUIPMENT, target->GetCurrentEquipmentId(), target->GetOriginalEquipmentId());
         handler->PSendSysMessage(LANG_NPCINFO_HEALTH, target->GetCreateHealth(), target->GetMaxHealth(), target->GetHealth());
         handler->PSendSysMessage(LANG_NPCINFO_FLAGS, target->GetUnitFlags(), target->GetUnitFlags2(), target->GetDynamicFlags(), target->GetFaction());
@@ -719,7 +713,7 @@ public:
                 if (!creatureTemplate)
                     continue;
 
-                handler->PSendSysMessage(LANG_CREATURE_LIST_CHAT, guid, guid, creatureTemplate->Name.c_str(), x, y, z, mapId, "", "");
+                handler->PSendSysMessage(LANG_CREATURE_LIST_CHAT, guid, entry, guid, creatureTemplate->Name.c_str(), x, y, z, mapId, "", "");
 
                 ++count;
             } while (result->NextRow());

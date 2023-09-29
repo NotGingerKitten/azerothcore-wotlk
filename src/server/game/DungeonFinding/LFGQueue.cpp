@@ -26,6 +26,7 @@
 #include "ObjectDefines.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 #include "World.h"
 
 namespace lfg
@@ -412,6 +413,11 @@ namespace lfg
         if (!sLFGMgr->AllQueued(check)) // can't create proposal
             return LFG_COMPATIBILITY_PENDING;
 
+        if (!sScriptMgr->OnPlayerbotCheckLFGQueue(proposal.queues))
+        {
+            return LFG_INCOMPATIBLES_HAS_IGNORES;
+        }
+
         // Create a new proposal
         proposal.cancelTime = GameTime::GetGameTime().count() + LFG_TIME_PROPOSAL;
         proposal.state = LFG_PROPOSAL_INITIATING;
@@ -445,7 +451,7 @@ namespace lfg
                 {
                     if (Player* player = ObjectAccessor::FindConnectedPlayer(itRoles->first))
                     {
-                        if (player->GetMapId() == static_cast<uint32>(dungeon->map))
+                        if (player->GetMapId() == static_cast<uint32>(dungeon->MapID))
                         {
                             if (InstanceScript* instance = player->GetInstanceScript())
                             {

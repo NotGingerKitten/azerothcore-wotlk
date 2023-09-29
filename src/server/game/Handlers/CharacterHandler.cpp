@@ -45,7 +45,7 @@
 #include "Realm.h"
 #include "ReputationMgr.h"
 #include "ScriptMgr.h"
-#include "ServerMotd.h"
+#include "MotdMgr.h"
 #include "SharedDefines.h"
 #include "SocialMgr.h"
 #include "SpellAuraEffects.h"
@@ -59,19 +59,9 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
-class LoginQueryHolder : public CharacterDatabaseQueryHolder
+LoginQueryHolder::LoginQueryHolder(uint32 accountId, ObjectGuid guid) : m_accountId(accountId), m_guid(guid)
 {
-private:
-    uint32 m_accountId;
-    ObjectGuid m_guid;
-public:
-    LoginQueryHolder(uint32 accountId, ObjectGuid guid)
-        : m_accountId(accountId), m_guid(guid) { }
-
-    ObjectGuid GetGuid() const { return m_guid; }
-    uint32 GetAccountId() const { return m_accountId; }
-    bool Initialize();
-};
+}
 
 bool LoginQueryHolder::Initialize()
 {
@@ -356,12 +346,6 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
         return;
     }
 
-    if (AccountMgr::IsPlayerAccount(GetSecurity()) && sObjectMgr->IsReservedName(createInfo->Name))
-    {
-        SendCharCreate(CHAR_NAME_RESERVED);
-        return;
-    }
-
     // speedup check for heroic class disabled case
     uint32 heroic_free_slots = sWorld->getIntConfig(CONFIG_HEROIC_CHARACTERS_PER_REALM);
     if (heroic_free_slots == 0 && AccountMgr::IsPlayerAccount(GetSecurity()) && createInfo->Class == CLASS_DEATH_KNIGHT)
@@ -567,7 +551,12 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
             newChar->SaveToDB(characterTransaction, true, false);
             createInfo->CharCount++;
 
-            LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_REP_REALM_CHARACTERS);
+            LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_DEL_REALM_CHARACTERS_BY_REALM);
+            stmt->SetData(0, GetAccountId());
+            stmt->SetData(1, realm.Id.Realm);
+            trans->Append(stmt);
+
+            stmt = LoginDatabase.GetPreparedStatement(LOGIN_REP_REALM_CHARACTERS);
             stmt->SetData(0, createInfo->CharCount);
             stmt->SetData(1, GetAccountId());
             stmt->SetData(2, realm.Id.Realm);
@@ -581,7 +570,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
                 {
                     LOG_INFO("entities.player.character", "Account: {} (IP: {}) Create Character: {} {}", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
                     sScriptMgr->OnPlayerCreate(newChar.get());
-                    sCharacterCache->AddCharacterCacheEntry(newChar->GetGUID(), GetAccountId(), newChar->GetName(), newChar->getGender(), newChar->getRace(), newChar->getClass(), newChar->getLevel());
+                    sCharacterCache->AddCharacterCacheEntry(newChar->GetGUID(), GetAccountId(), newChar->GetName(), newChar->getGender(), newChar->getRace(), newChar->getClass(), newChar->GetLevel());
                     SendCharCreate(CHAR_CREATE_SUCCESS);
                 }
                 else
@@ -658,7 +647,8 @@ void WorldSession::HandleCharDeleteOpcode(WorldPacket& recvData)
     sCalendarMgr->RemoveAllPlayerEventsAndInvites(guid);
     Player::DeleteFromDB(guid.GetCounter(), GetAccountId(), true, false);
 
-    sCharacterCache->DeleteCharacterCacheEntry(guid, name);
+    sWorld->UpdateRealmCharCount(GetAccountId());
+
     SendCharDelete(CHAR_DELETE_SUCCESS);
 }
 
@@ -790,6 +780,7 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
 
 void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
 {
+    m_playerLoading = true;
     ObjectGuid playerGuid = holder.GetGuid();
 
     Player* pCurrChar = new Player(this);
@@ -828,7 +819,7 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
 
     // Send MOTD
     {
-        SendPacket(Motd::GetMotdPacket());
+        SendPacket(sMotdMgr->GetMotdPacket());
 
         // send server info
         if (sWorld->getIntConfig(CONFIG_ENABLE_SINFO_LOGIN) == 1)
@@ -903,8 +894,7 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     CharacterDatabase.Execute(stmt);
 
     LoginDatabasePreparedStatement* loginStmt = LoginDatabase.GetPreparedStatement(LOGIN_UPD_ACCOUNT_ONLINE);
-    loginStmt->SetData(0, realm.Id.Realm);
-    loginStmt->SetData(1, GetAccountId());
+    loginStmt->SetData(0, GetAccountId());
     LoginDatabase.Execute(loginStmt);
 
     pCurrChar->SetInGameTime(GameTime::GetGameTimeMS().count());
@@ -1046,7 +1036,7 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
 
     std::string IP_str = GetRemoteAddress();
     LOG_INFO("entities.player", "Account: {} (IP: {}) Login Character:[{}] ({}) Level: {}",
-                  GetAccountId(), IP_str, pCurrChar->GetName(), pCurrChar->GetGUID().ToString(), pCurrChar->getLevel());
+                  GetAccountId(), IP_str, pCurrChar->GetName(), pCurrChar->GetGUID().ToString(), pCurrChar->GetLevel());
 
     if (!pCurrChar->IsStandState() && !pCurrChar->HasUnitState(UNIT_STATE_STUNNED))
         pCurrChar->SetStandState(UNIT_STAND_STATE_STAND);
@@ -1144,7 +1134,7 @@ void WorldSession::HandlePlayerLoginToCharInWorld(Player* pCurrChar)
 
     // Send MOTD
     {
-        SendPacket(Motd::GetMotdPacket());
+        SendPacket(sMotdMgr->GetMotdPacket());
 
         // send server info
         if (sWorld->getIntConfig(CONFIG_ENABLE_SINFO_LOGIN) == 1)
@@ -1347,13 +1337,6 @@ void WorldSession::HandleCharRenameOpcode(WorldPacket& recvData)
     if (res != CHAR_NAME_SUCCESS)
     {
         SendCharRename(ResponseCodes(res), renameInfo.get());
-        return;
-    }
-
-    // check name limitations
-    if (AccountMgr::IsPlayerAccount(GetSecurity()) && sObjectMgr->IsReservedName(renameInfo->Name))
-    {
-        SendCharRename(CHAR_NAME_RESERVED, renameInfo.get());
         return;
     }
 
@@ -1694,13 +1677,6 @@ void WorldSession::HandleCharCustomizeCallback(std::shared_ptr<CharacterCustomiz
     if (res != CHAR_NAME_SUCCESS)
     {
         SendCharCustomize(res, customizeInfo.get());
-        return;
-    }
-
-    // check name limitations
-    if (AccountMgr::IsPlayerAccount(GetSecurity()) && sObjectMgr->IsReservedName(customizeInfo->Name))
-    {
-        SendCharCustomize(CHAR_NAME_RESERVED, customizeInfo.get());
         return;
     }
 
@@ -2082,13 +2058,6 @@ void WorldSession::HandleCharFactionOrRaceChangeCallback(std::shared_ptr<Charact
         return;
     }
 
-    // check name limitations
-    if (AccountMgr::IsPlayerAccount(GetSecurity()) && sObjectMgr->IsReservedName(factionChangeInfo->Name))
-    {
-        SendCharFactionChange(CHAR_NAME_RESERVED, factionChangeInfo.get());
-        return;
-    }
-
     // character with this name already exist
     if (ObjectGuid newguid = sCharacterCache->GetCharacterGuidByName(factionChangeInfo->Name))
     {
@@ -2275,7 +2244,7 @@ void WorldSession::HandleCharFactionOrRaceChangeCallback(std::shared_ptr<Charact
 
                     // Get level from LFGDungeonEntry because the one from AreaTableEntry is not valid
                     // If area level is too big, do not add new taxi
-                    if (lfgDungeon->minlevel > level)
+                    if (lfgDungeon->MinLevel > level)
                     {
                         FillTaxiMask(field, 0);
                         continue;

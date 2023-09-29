@@ -30,6 +30,7 @@
 #include "Common.h"
 #include "DatabaseEnv.h"
 #include "GossipDef.h"
+#include "QueryHolder.h"
 #include "Packet.h"
 #include "SharedDefines.h"
 #include "World.h"
@@ -40,7 +41,6 @@ class Creature;
 class GameObject;
 class InstanceSave;
 class Item;
-class LoginQueryHolder;
 class LoadPetFromDBQueryHolder;
 class Object;
 class Pet;
@@ -225,6 +225,20 @@ enum CharterTypes
     ARENA_TEAM_CHARTER_5v5_TYPE                   = 5
 };
 
+class LoginQueryHolder : public CharacterDatabaseQueryHolder
+{
+    private:
+        uint32 m_accountId;
+        ObjectGuid m_guid;
+
+    public:
+        LoginQueryHolder(uint32 accountId, ObjectGuid guid);
+
+        ObjectGuid GetGuid() const { return m_guid; }
+        uint32 GetAccountId() const { return m_accountId; }
+        bool Initialize();
+};
+
 //class to deal with packet processing
 //allows to determine if next packet is safe to be processed
 class PacketFilter
@@ -268,6 +282,11 @@ class CharacterCreateInfo
 {
     friend class WorldSession;
     friend class Player;
+
+public:
+    CharacterCreateInfo(std::string const name = "", uint8 _race = 0, uint8 _class = 0, uint8 gender = 0, uint8 skin = 0, uint8 face = 0,
+        uint8 hairStyle = 0, uint8 hairColor = 0, uint8 facialHair = 0)
+        : Name(name), Race(_race), Class(_class), Gender(gender), Skin(skin), Face(face), HairStyle(hairStyle), HairColor(hairColor), FacialHair(facialHair) { }
 
 protected:
     /// User specified variables
@@ -329,11 +348,13 @@ struct PacketCounter
 class WorldSession
 {
 public:
-    WorldSession(uint32 id, std::string&& name, std::shared_ptr<WorldSocket> sock, AccountTypes sec, uint8 expansion, time_t mute_time, LocaleConstant locale, uint32 recruiter, bool isARecruiter, bool skipQueue, uint32 TotalTime);
+    WorldSession(uint32 id, std::string&& name, std::shared_ptr<WorldSocket> sock, AccountTypes sec, uint8 expansion, time_t mute_time, LocaleConstant locale,
+        uint32 recruiter, bool isARecruiter, bool skipQueue, uint32 TotalTime, bool isBot = false);
     ~WorldSession();
 
     bool PlayerLoading() const { return m_playerLoading; }
     bool PlayerLogout() const { return m_playerLogout; }
+    bool PlayerRecentlyLoggedOut() const { return m_playerRecentlyLogout; }
     bool PlayerLogoutWithSave() const { return m_playerLogout && m_playerSave; }
 
     void ReadAddonsInfo(ByteBuffer& data);
@@ -348,6 +369,7 @@ public:
     void SendPetNameInvalid(uint32 error, std::string const& name, DeclinedName* declinedName);
     void SendPartyResult(PartyOperation operation, std::string const& member, PartyResult res, uint32 val = 0);
     void SendAreaTriggerMessage(const char* Text, ...) ATTR_PRINTF(2, 3);
+    void SendAreaTriggerMessage(uint32 entry, ...);
     void SendSetPhaseShift(uint32 phaseShift);
     void SendQueryTimeResponse();
 
@@ -374,6 +396,7 @@ public:
     uint32 GetTotalTime() const { return m_total_time; }
 
     void InitWarden(SessionKey const&, std::string const& os);
+    Warden* GetWarden();
 
     /// Session in auth.queue currently
     void SetInQueue(bool state) { m_inQueue = state; }
@@ -447,10 +470,9 @@ public:
     AccountData* GetAccountData(AccountDataType type) { return &m_accountData[type]; }
     void SetAccountData(AccountDataType type, time_t tm, std::string const& data);
     void SendAccountDataTimes(uint32 mask);
-    void LoadGlobalAccountData();
     void LoadAccountData(PreparedQueryResult result, uint32 mask);
 
-    void LoadTutorialsData();
+    void LoadTutorialsData(PreparedQueryResult result);
     void SendTutorialsData();
     void SaveTutorialsData(CharacterDatabaseTransaction trans);
     uint32 GetTutorialInt(uint8 index) const { return m_Tutorials[index]; }
@@ -530,6 +552,7 @@ public:
     // Time Synchronisation
     void ResetTimeSync();
     void SendTimeSync();
+
 public:                                                 // opcodes handlers
     void Handle_NULL(WorldPacket& null);                // not used
     void Handle_EarlyProccess(WorldPacket& recvPacket); // just mark packets processed in WorldSocket::OnRead
@@ -1056,8 +1079,8 @@ public:                                                 // opcodes handlers
     void HandleEnterPlayerVehicle(WorldPacket& data);
     void HandleUpdateProjectilePosition(WorldPacket& recvPacket);
 
-    uint32 _lastAuctionListItemsMSTime;
-    uint32 _lastAuctionListOwnerItemsMSTime;
+    Milliseconds _lastAuctionListItemsMSTime;
+    Milliseconds _lastAuctionListOwnerItemsMSTime;
 
     void HandleTeleportTimeout(bool updateInSessions);
     bool HandleSocketClosed();
@@ -1065,9 +1088,9 @@ public:                                                 // opcodes handlers
     uint32 GetOfflineTime() const { return _offlineTime; }
     bool IsKicked() const { return _kicked; }
     void SetKicked(bool val) { _kicked = val; }
-    void SetShouldSetOfflineInDB(bool val) { _shouldSetOfflineInDB = val; }
-    bool GetShouldSetOfflineInDB() const { return _shouldSetOfflineInDB; }
     bool IsSocketClosed() const;
+
+    void SetAddress(std::string const& address) { m_Address = address; }
 
     /*
      * CALLBACKS
@@ -1076,6 +1099,16 @@ public:                                                 // opcodes handlers
     QueryCallbackProcessor& GetQueryProcessor() { return _queryProcessor; }
     TransactionCallback& AddTransactionCallback(TransactionCallback&& callback);
     SQLQueryHolderCallback& AddQueryHolderCallback(SQLQueryHolderCallback&& callback);
+
+    void InitializeSession();
+    void InitializeSessionCallback(CharacterDatabaseQueryHolder const& realmHolder, uint32 clientCacheVersion);
+
+    LockedQueue<WorldPacket*>& GetPacketQueue();
+
+    [[nodiscard]] bool IsBot() const
+    {
+        return _isBot;
+    }
 
 private:
     void ProcessQueryCallbacks();
@@ -1136,7 +1169,7 @@ private:
     // characters who failed on Player::BuildEnumData shouldn't login
     GuidSet _legitCharacters;
 
-    ObjectGuid::LowType m_GUIDLow;
+    ObjectGuid::LowType m_GUIDLow;                     // set logined or recently logout player (while m_playerRecentlyLogout set)
     Player* _player;
     std::shared_ptr<WorldSocket> m_Socket;
     std::string m_Address;
@@ -1157,6 +1190,7 @@ private:
     bool m_inQueue;                                     // session wait in auth.queue
     bool m_playerLoading;                               // code processed in LoginPlayer
     bool m_playerLogout;                                // code processed in LogoutPlayer
+    bool m_playerRecentlyLogout;
     bool m_playerSave;
     LocaleConstant m_sessionDbcLocale;
     LocaleConstant m_sessionDbLocaleIndex;
@@ -1172,7 +1206,6 @@ private:
     ObjectGuid m_currentBankerGUID;
     uint32 _offlineTime;
     bool _kicked;
-    bool _shouldSetOfflineInDB;
     // Packets cooldown
     time_t _calendarEventCreationCooldown;
 
@@ -1186,6 +1219,8 @@ private:
     std::map<uint32, uint32> _pendingTimeSyncRequests; // key: counter. value: server time when packet with that counter was sent.
     uint32 _timeSyncNextCounter;
     uint32 _timeSyncTimer;
+
+    bool _isBot;
 
     WorldSession(WorldSession const& right) = delete;
     WorldSession& operator=(WorldSession const& right) = delete;

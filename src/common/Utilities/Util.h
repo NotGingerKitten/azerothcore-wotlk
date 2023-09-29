@@ -211,6 +211,11 @@ inline bool isNumeric(char c)
     return (c >= '0' && c <= '9');
 }
 
+inline bool IsEvenNumber(int32 n)
+{
+    return n % 2 == 0;
+}
+
 inline bool isNumeric(char const* str)
 {
     for (char const* c = str; *c; ++c)
@@ -351,6 +356,7 @@ inline wchar_t wcharToLower(wchar_t wchar)
 
 void wstrToUpper(std::wstring& str);
 void wstrToLower(std::wstring& str);
+void strToLower(std::string& str);
 
 std::wstring GetMainPartOfName(std::wstring const& wname, uint32 declension);
 

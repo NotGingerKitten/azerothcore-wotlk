@@ -260,7 +260,7 @@ enum SocketColor
 
 #define SOCKET_COLOR_ALL (SOCKET_COLOR_META | SOCKET_COLOR_RED | SOCKET_COLOR_YELLOW | SOCKET_COLOR_BLUE)
 
-enum InventoryType
+enum InventoryType : uint32
 {
     INVTYPE_NON_EQUIP                           = 0,
     INVTYPE_HEAD                                = 1,
@@ -752,8 +752,10 @@ struct ItemTemplate
 
     [[nodiscard]] int32 getFeralBonus(int32 extraDPS = 0) const
     {
+        constexpr uint32 feralApEnabledInventoryTypeMaks = 1 << INVTYPE_WEAPON | 1 << INVTYPE_2HWEAPON | 1 << INVTYPE_WEAPONMAINHAND | 1 << INVTYPE_WEAPONOFFHAND;
+
         // 0x02A5F3 - is mask for Melee weapon from ItemSubClassMask.dbc
-        if (Class == ITEM_CLASS_WEAPON && (1 << SubClass) & 0x02A5F3)
+        if (Class == ITEM_CLASS_WEAPON && (1 << InventoryType) & feralApEnabledInventoryTypeMaks)
         {
             int32 bonus = int32((extraDPS + getDPS()) * 14.0f) - 767;
             if (bonus < 0)
@@ -827,6 +829,8 @@ struct ItemTemplate
     [[nodiscard]] bool IsWeaponVellum() const { return Class == ITEM_CLASS_TRADE_GOODS && SubClass == ITEM_SUBCLASS_WEAPON_ENCHANTMENT; }
     [[nodiscard]] bool IsArmorVellum() const { return Class == ITEM_CLASS_TRADE_GOODS && SubClass == ITEM_SUBCLASS_ARMOR_ENCHANTMENT; }
     [[nodiscard]] bool IsConjuredConsumable() const { return Class == ITEM_CLASS_CONSUMABLE && (Flags & ITEM_FLAG_CONJURED); }
+    [[nodiscard]] bool IsWeapon() const { return Class == ITEM_CLASS_WEAPON; }
+    [[nodiscard]] bool IsRangedWeapon() const { return IsWeapon() && (InventoryType == INVTYPE_RANGED || InventoryType == INVTYPE_THROWN || InventoryType == INVTYPE_RANGEDRIGHT); }
 
     [[nodiscard]] bool HasStat(ItemModType stat) const;
     [[nodiscard]] bool HasSpellPowerStat() const;

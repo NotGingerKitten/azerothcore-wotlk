@@ -1339,7 +1339,7 @@ enum Mechanics : uint32
     (1<<MECHANIC_SAPPED))
 
 // Spell dispel type
-enum DispelType
+enum DispelType : uint8
 {
     DISPEL_NONE         = 0,
     DISPEL_MAGIC        = 1,
@@ -1381,8 +1381,8 @@ enum Targets
 {
     TARGET_UNIT_CASTER                 = 1,
     TARGET_UNIT_NEARBY_ENEMY           = 2,
-    TARGET_UNIT_NEARBY_PARTY           = 3,
-    TARGET_UNIT_NEARBY_ALLY            = 4,
+    TARGET_UNIT_NEARBY_ALLY            = 3,
+    TARGET_UNIT_NEARBY_PARTY           = 4,
     TARGET_UNIT_PET                    = 5,
     TARGET_UNIT_TARGET_ENEMY           = 6,
     TARGET_UNIT_SRC_AREA_ENTRY         = 7,
@@ -1603,7 +1603,7 @@ enum GameObjectDestructibleState
 };
 
 // EmotesText.dbc
-enum TextEmotes
+enum TextEmotes : uint32
 {
     TEXT_EMOTE_AGREE                = 1,
     TEXT_EMOTE_AMAZE                = 2,
@@ -3118,7 +3118,7 @@ enum WeatherType
 #define MAX_WEATHER_TYPE 4
 
 // EnumUtils: DESCRIBE THIS
-enum ChatMsg
+enum ChatMsg : uint32
 {
     CHAT_MSG_ADDON                  = 0xFFFFFFFF,
     CHAT_MSG_SYSTEM                 = 0x00,
